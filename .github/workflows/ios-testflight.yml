@@ -67,7 +67,7 @@ jobs:
           set -e
           echo "=== configured sources ==="
           dotnet nuget list source
-          SOURCE_NAME=$(dotnet nuget list source --format short | awk '{print $2}' | grep -v -i nuget.org | head -n1)
+          SOURCE_NAME=$(dotnet nuget list source | grep -E '^\s*[0-9]+\.' | awk '{print $2}' | grep -v -i '^nuget.org$' | head -n1)
           echo "Resolved source name: '$SOURCE_NAME'"
           if [ -z "$SOURCE_NAME" ]; then
             echo "::error::Could not resolve a non-nuget.org source name from NuGet.Config."
