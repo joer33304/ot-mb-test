@@ -49,7 +49,12 @@ jobs:
           set -e
           rm -f global.json
           dotnet --version
-          IOS_CSPROJ=$(grep -rl 'net.*-ios' --include=*.csproj . | head -n1)
+          IOS_CSPROJ=$(grep -rl 'net.*-ios' --include=*.csproj . | grep -vi hello | head -n1)
+          echo "Resolved project: $IOS_CSPROJ"
+          if [ -z "$IOS_CSPROJ" ]; then
+            echo "::error::No iOS csproj found."
+            exit 1
+          fi
           echo "IOS_CSPROJ=$IOS_CSPROJ" >> "$GITHUB_ENV"
           echo "IOS_DIR=$(dirname "$IOS_CSPROJ")" >> "$GITHUB_ENV"
 
@@ -60,7 +65,14 @@ jobs:
           FEED_PASS: ${{ secrets.FEED_PASS }}
         run: |
           set -e
-          SOURCE_NAME=$(dotnet nuget list source --format short | awk '{print $2}' | grep -v nuget.org | head -n1)
+          echo "=== configured sources ==="
+          dotnet nuget list source
+          SOURCE_NAME=$(dotnet nuget list source --format short | awk '{print $2}' | grep -v -i nuget.org | head -n1)
+          echo "Resolved source name: '$SOURCE_NAME'"
+          if [ -z "$SOURCE_NAME" ]; then
+            echo "::error::Could not resolve a non-nuget.org source name from NuGet.Config."
+            exit 1
+          fi
           dotnet nuget update source "$SOURCE_NAME" \
             --username "$FEED_USER" \
             --password "$FEED_PASS" \
