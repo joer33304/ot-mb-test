@@ -97,6 +97,7 @@ jobs:
           set -e
           echo "P12_BASE64 length: ${#P12_BASE64}"
           echo -n "$P12_BASE64" | shasum -a 256
+          echo "P12_PASSWORD length: ${#P12_PASSWORD}"
           KEYCHAIN=build.keychain
           KEYCHAIN_PW=$(openssl rand -base64 24)
           security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
