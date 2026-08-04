@@ -106,24 +106,40 @@ jobs:
         run: |
           set -e
           TARGET="/Applications/Xcode_26.6.0.app"
-          DEV="$TARGET/Contents/Developer"
-          SDK="$DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-          sudo xcode-select -s "$DEV"
-          sudo xcodebuild -license accept || true
-          sudo xcodebuild -runFirstLaunch
-          if ! xcodebuild -sdk "$SDK" -find actool >/dev/null 2>&1; then
-            echo "::error::actool still unresolvable for Xcode 26.6.0 right before publish."
-            xcodebuild -sdk "$SDK" -find actool
-            exit 1
-          fi
-          dotnet publish "$IOS_CSPROJ" \
-            -f net10.0-ios -c Release \
-            -p:RuntimeIdentifier=ios-arm64 -p:ArchiveOnBuild=true \
-            -p:CodesignKey="$CODESIGN_IDENTITY" \
-            -p:CodesignProvision="$PROVISION_UUID" \
-            -p:XcodeLocation="$DEV" \
-            -o "$GITHUB_WORKSPACE/out"
 
+          echo "=== ls /Applications (xcode only) ==="
+          ls -la /Applications | grep -i xcode
+
+          echo "=== $TARGET ==="
+          ls -la "$TARGET" 2>&1 || echo "MISSING"
+
+          echo "=== Contents/Developer ==="
+          ls -la "$TARGET/Contents/Developer" 2>&1 || echo "MISSING"
+
+          echo "=== Platforms ==="
+          ls -la "$TARGET/Contents/Developer/Platforms" 2>&1 || echo "MISSING"
+
+          echo "=== Platforms/MacOSX.platform ==="
+          ls -la "$TARGET/Contents/Developer/Platforms/MacOSX.platform" 2>&1 || echo "MISSING"
+
+          echo "=== MacOSX.platform/Developer ==="
+          ls -la "$TARGET/Contents/Developer/Platforms/MacOSX.platform/Developer" 2>&1 || echo "MISSING"
+
+          echo "=== Developer/SDKs ==="
+          ls -la "$TARGET/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs" 2>&1 || echo "MISSING"
+
+          echo "=== SDKs/MacOSX.sdk ==="
+          ls -la "$TARGET/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" 2>&1 || echo "MISSING"
+
+          echo "=== realpath MacOSX.sdk (resolves symlinks) ==="
+          realpath "$TARGET/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk" 2>&1 || echo "REALPATH FAILED"
+
+          echo "=== disk free ==="
+          df -h /Applications
+
+          echo "=== diagnostic only, stopping here on purpose ==="
+          exit 1
+          
       - name: Package
         run: |
           set -e
