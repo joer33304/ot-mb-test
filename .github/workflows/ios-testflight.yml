@@ -26,22 +26,21 @@ jobs:
       - name: Select toolchain
         run: |
           set -e
-          FOUND=""
-          for APP in $(ls -d /Applications/Xcode_26*.app | sort -Vr); do
-            DEV="$APP/Contents/Developer"
-            SDK="$DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-            if xcodebuild -sdk "$SDK" -find actool >/dev/null 2>&1; then
-              FOUND="$DEV"
-              break
-            fi
-          done
-          if [ -z "$FOUND" ]; then
-            echo "::error::No usable Xcode 26.x found."
+          TARGET="/Applications/Xcode_26.6.0.app"
+          sudo xcode-select -s "$TARGET/Contents/Developer"
+          sudo xcodebuild -license accept || true
+          sudo xcodebuild -runFirstLaunch
+          DEV="$TARGET/Contents/Developer"
+          SDK="$DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+          if xcodebuild -sdk "$SDK" -find actool >/dev/null 2>&1; then
+            echo "actool now resolves for Xcode 26.6.0"
+          else
+            echo "::error::actool still unresolvable for Xcode 26.6.0 after -runFirstLaunch."
+            xcodebuild -sdk "$SDK" -find actool
             exit 1
           fi
-          sudo xcode-select -s "$FOUND"
           xcodebuild -version
-          echo "XCODE_DEV_DIR=$FOUND" >> "$GITHUB_ENV"
+          echo "XCODE_DEV_DIR=$DEV" >> "$GITHUB_ENV"
 
       - name: Prepare SDK
         working-directory: src
