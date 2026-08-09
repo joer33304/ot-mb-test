@@ -1,3 +1,28 @@
+# iOS TestFlight build.
+#
+# Normally started by an upstream Azure DevOps pipeline, which then blocks until the final
+# "Report result back to Azure DevOps" step posts the outcome of this run back to it. It can also
+# be run by hand from the Actions tab — with no planUrl input, that callback step simply skips.
+#
+# A mirrored, reviewed copy of this file is version-controlled in the upstream Azure DevOps repo.
+# Edit it HERE first, then mirror the change there.
+#
+# This repo is public so the macOS runners are free and unmetered. It therefore holds only this
+# workflow and never any application source: the build clones the real source at run time via
+# secrets.AZDO_PAT / secrets.AZDO_REPO_URL. Keep every project path, feed URL and endpoint
+# RESOLVED AT RUN TIME or held in a secret — never a literal in this file. Run logs are
+# world-readable too (secret VALUES are masked, echoed paths are not).
+#
+# REQUIRED GITHUB SECRETS
+#   AZDO_PAT, AZDO_REPO_URL            clone the source out of Azure DevOps
+#   IOS_DIST_P12_BASE64, P12_PASSWORD  Apple distribution certificate
+#   PROVISION_PROFILE_BASE64           App Store provisioning profile
+#   ASC_AUTH_KEY_BASE64, ASC_KEY_ID, ASC_ISSUER_ID   App Store Connect API key for altool
+#   FEED_USER, FEED_PASS               internal NuGet feed
+#   AZDO_CALLBACK_PAT                  PBI 612 — reports the result back to Azure Pipelines
+#   API_URL                            PBI 612 — OPTIONAL. Overrides the API endpoint the built app
+#                                      talks to. Unset ⇒ ship appsettings.release.json as committed.
+
 name: iOS Build
 
 on:
@@ -8,12 +33,40 @@ on:
         required: true
         default: 'master'
 
+      # --- PBI 612: everything below is supplied by the Azure pipeline that dispatches this run. ---
+      # ALL OPTIONAL, so running this workflow by hand from the GitHub UI still works exactly as it
+      # did before: with no planUrl the callback step simply skips.
+      planUrl:
+        description: '[Azure callback] collection URI'
+        required: false
+      projectId:
+        description: '[Azure callback] project id'
+        required: false
+      hubName:
+        description: '[Azure callback] hub name'
+        required: false
+      planId:
+        description: '[Azure callback] plan id'
+        required: false
+      jobId:
+        description: '[Azure callback] job id'
+        required: false
+      taskInstanceId:
+        description: '[Azure callback] task instance id'
+        required: false
+
 jobs:
   build:
     runs-on: macos-26
     env:
       NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
     steps:
+      # Echoed so an Azure run and a GitHub run can be matched up from either side. Azure cannot
+      # link here directly — workflow_dispatch returns 204 with no run id — so this is the join key.
+      - name: Azure correlation
+        if: inputs.planUrl != ''
+        run: echo "Dispatched by Azure DevOps — planId=${{ inputs.planId }} jobId=${{ inputs.jobId }}"
+
       - name: Checkout
         env:
           SRC_PAT: ${{ secrets.AZDO_PAT }}
@@ -22,6 +75,37 @@ jobs:
           set -e
           git clone --branch "${{ github.event.inputs.branch }}" --depth 1 \
             "https://x-access-token:${SRC_PAT}@${SRC_URL}" src
+
+      # PBI 612, ported from the Azure pipeline this replaced. Ephemeral working-copy edit only —
+      # the clone is thrown away with the runner. The same appsettings file is shared with the
+      # Desktop and Web builds, so this must never become a committed change.
+      #
+      # ServerURL in appsettings.release.json IS the API base the app talks to — it becomes
+      # StaticShared.ApiUrl at startup. Normal case: leave the API_URL secret UNSET and the build
+      # ships whatever is committed. Set it only to aim a build at a different API, and remember it
+      # then applies to EVERY build until cleared — same bundle id for all of them, so the next
+      # TestFlight update REPLACES whatever build a tester already had. There is no in-app picker.
+      # (Per-tenant build selection is a separate PBI; it is deliberately not modelled here.)
+      #
+      # The empty check lives inside the script rather than in a step-level `if:` because the
+      # `secrets` context is not available in step conditionals.
+      - name: Point the build at a specific API
+        working-directory: src
+        env:
+          API_URL: ${{ secrets.API_URL }}
+        run: |
+          set -e
+          if [ -z "$API_URL" ]; then
+            echo "API_URL secret is unset — shipping the committed appsettings.release.json ServerURL as-is"
+            exit 0
+          fi
+          FILE=$(find . -name appsettings.release.json -not -path '*/bin/*' -not -path '*/obj/*' | head -n1)
+          if [ -z "$FILE" ]; then
+            echo "::error::No appsettings.release.json found in the checkout."
+            exit 1
+          fi
+          SETTINGS_FILE="$FILE" python3 -c "import json,os; p=os.environ['SETTINGS_FILE']; d=json.load(open(p)); d['ServerURL']=os.environ['API_URL']; json.dump(d, open(p,'w'), indent=2)"
+          echo "Patched $FILE ServerURL for this run's build only"
 
       - name: Prepare SDK
         working-directory: src
@@ -63,6 +147,10 @@ jobs:
         working-directory: src
         run: dotnet workload install ios
 
+      # GITHUB_RUN_ID, not the Azure build id. App Store Connect rejects a build number lower than
+      # one it has already accepted for this version, and run ids are large and always increasing,
+      # whereas Azure's Build.BuildId (~2300) is far BELOW the run ids already uploaded. Do not
+      # "unify" this with the Azure build number.
       - name: Stamp build number
         working-directory: src
         run: |
@@ -101,6 +189,10 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/"Provisioning Profiles"/"$UUID".mobileprovision
           echo "PROVISION_UUID=$UUID" >> "$GITHUB_ENV"
 
+      # The Xcode path is the CANONICAL Xcode_26.6.app, never the Xcode_26.6.0.app symlink alias:
+      # xcodebuild's SDK resolution keys off the real path and fails intermittently through the
+      # alias. The actool check is deliberately in the SAME step as the publish, with no gap — an
+      # earlier standalone check was observed to pass and then fail minutes later at publish time.
       - name: Publish
         working-directory: src
         run: |
@@ -121,7 +213,7 @@ jobs:
             -p:CodesignProvision="$PROVISION_UUID" \
             -p:XcodeLocation="$DEV" \
             -o "$GITHUB_WORKSPACE/out"
-          
+
       - name: Package
         run: |
           set -e
@@ -141,13 +233,30 @@ jobs:
           xcrun altool --validate-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
-      - name: Upload artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-output
-          path: app.ipa
+      # NOTE: there is deliberately NO upload-artifact step. This repo is public, and artifacts on a
+      # public repo are downloadable by anyone — publishing app.ipa there would put the whole signed
+      # application in public hands. TestFlight above is the delivery mechanism; the .ipa is debris.
+      # Do not re-add it. If a build ever needs inspecting, re-run and add it temporarily on a
+      # branch, or make the repo private for that run.
 
       - name: Cleanup
         if: always()
         run: security delete-keychain build.keychain || true
+
+      # PBI 612 — this is what turns the waiting Azure job green or red. `always()` is load-bearing:
+      # without it a failed build never calls back and the Azure job hangs until its 120-minute
+      # timeout instead of reporting the failure. Skipped entirely for manual GitHub-UI runs.
+      - name: Report result back to Azure DevOps
+        if: always() && inputs.planUrl != ''
+        env:
+          AZDO_CALLBACK_PAT: ${{ secrets.AZDO_CALLBACK_PAT }}
+        run: |
+          set -e
+          if [ "${{ job.status }}" = "success" ]; then RESULT=succeeded; else RESULT=failed; fi
+          echo "Reporting '$RESULT' to Azure DevOps plan ${{ inputs.planId }}"
+          AUTH=$(printf ":%s" "$AZDO_CALLBACK_PAT" | base64)
+          curl -sS --fail-with-body -X POST \
+            "${{ inputs.planUrl }}${{ inputs.projectId }}/_apis/distributedtask/hubs/${{ inputs.hubName }}/plans/${{ inputs.planId }}/events?api-version=2.0-preview.1" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Basic $AUTH" \
+            -d "{\"name\":\"TaskCompleted\",\"taskId\":\"${{ inputs.taskInstanceId }}\",\"jobId\":\"${{ inputs.jobId }}\",\"result\":\"$RESULT\"}"
