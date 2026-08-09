@@ -1,8 +1,9 @@
 # iOS TestFlight build.
 #
-# Normally started by an upstream Azure DevOps pipeline, which then blocks until the final
-# "Report result back to Azure DevOps" step posts the outcome of this run back to it. It can also
-# be run by hand from the Actions tab — with no planUrl input, that callback step simply skips.
+# Started by an upstream Azure DevOps pipeline, which passes the branch to build and its own build
+# id for correlation. That pipeline does NOT wait for this run — it goes green the moment the
+# dispatch is accepted, so THIS run is the authority on whether the build actually worked.
+# Can also be run by hand from the Actions tab.
 #
 # A mirrored, reviewed copy of this file is version-controlled in the upstream Azure DevOps repo.
 # Edit it HERE first, then mirror the change there.
@@ -11,7 +12,8 @@
 # workflow and never any application source: the build clones the real source at run time via
 # secrets.AZDO_PAT / secrets.AZDO_REPO_URL. Keep every project path, feed URL and endpoint
 # RESOLVED AT RUN TIME or held in a secret — never a literal in this file. Run logs are
-# world-readable too (secret VALUES are masked, echoed paths are not).
+# world-readable too (secret VALUES are masked, echoed paths are not), and so are
+# workflow_dispatch inputs — never accept a credential as an input here.
 #
 # REQUIRED GITHUB SECRETS
 #   AZDO_PAT, AZDO_REPO_URL            clone the source out of Azure DevOps
@@ -19,7 +21,6 @@
 #   PROVISION_PROFILE_BASE64           App Store provisioning profile
 #   ASC_AUTH_KEY_BASE64, ASC_KEY_ID, ASC_ISSUER_ID   App Store Connect API key for altool
 #   FEED_USER, FEED_PASS               internal NuGet feed
-#   AZDO_CALLBACK_PAT                  PBI 612 — reports the result back to Azure Pipelines
 #   API_URL                            PBI 612 — OPTIONAL. Overrides the API endpoint the built app
 #                                      talks to. Unset ⇒ ship appsettings.release.json as committed.
 
@@ -33,26 +34,15 @@ on:
         required: true
         default: 'master'
 
-      # --- PBI 612: everything below is supplied by the Azure pipeline that dispatches this run. ---
-      # ALL OPTIONAL, so running this workflow by hand from the GitHub UI still works exactly as it
-      # did before: with no planUrl the callback step simply skips.
-      planUrl:
-        description: '[Azure callback] collection URI'
-        required: false
-      projectId:
-        description: '[Azure callback] project id'
-        required: false
-      hubName:
-        description: '[Azure callback] hub name'
-        required: false
-      planId:
-        description: '[Azure callback] plan id'
-        required: false
-      jobId:
-        description: '[Azure callback] job id'
-        required: false
-      taskInstanceId:
-        description: '[Azure callback] task instance id'
+      # PBI 612 — supplied by the Azure pipeline that dispatches this run, purely so the two runs can
+      # be correlated. Optional, so a manual run from the Actions tab still works.
+      #
+      # This is the ONLY thing Azure passes besides the branch. Azure does NOT wait for this build:
+      # its job goes green the moment GitHub returns 204. Reporting the real outcome back would need
+      # the plan-scoped Azure token as an input here, and workflow_dispatch inputs are world-readable
+      # on a public repo. See the Azure YAML header for the full reasoning before changing this.
+      azureBuildId:
+        description: 'Azure DevOps build id that dispatched this run'
         required: false
 
 jobs:
@@ -64,8 +54,8 @@ jobs:
       # Echoed so an Azure run and a GitHub run can be matched up from either side. Azure cannot
       # link here directly — workflow_dispatch returns 204 with no run id — so this is the join key.
       - name: Azure correlation
-        if: inputs.planUrl != ''
-        run: echo "Dispatched by Azure DevOps — planId=${{ inputs.planId }} jobId=${{ inputs.jobId }}"
+        if: inputs.azureBuildId != ''
+        run: echo "Dispatched by Azure DevOps build ${{ inputs.azureBuildId }}"
 
       - name: Checkout
         env:
@@ -208,55 +198,3 @@ jobs:
           fi
           dotnet publish "$IOS_CSPROJ" \
             -f net10.0-ios -c Release \
-            -p:RuntimeIdentifier=ios-arm64 -p:ArchiveOnBuild=true \
-            -p:CodesignKey="$CODESIGN_IDENTITY" \
-            -p:CodesignProvision="$PROVISION_UUID" \
-            -p:XcodeLocation="$DEV" \
-            -o "$GITHUB_WORKSPACE/out"
-
-      - name: Package
-        run: |
-          set -e
-          IPA=$(find "$GITHUB_WORKSPACE/out" -name '*.ipa' | head -n1)
-          cp "$IPA" "$GITHUB_WORKSPACE/app.ipa"
-
-      - name: Upload to store
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_BASE64: ${{ secrets.ASC_AUTH_KEY_BASE64 }}
-        run: |
-          set -e
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo "$ASC_KEY_BASE64" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8
-          IPA="$GITHUB_WORKSPACE/app.ipa"
-          xcrun altool --validate-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-          xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-
-      # NOTE: there is deliberately NO upload-artifact step. This repo is public, and artifacts on a
-      # public repo are downloadable by anyone — publishing app.ipa there would put the whole signed
-      # application in public hands. TestFlight above is the delivery mechanism; the .ipa is debris.
-      # Do not re-add it. If a build ever needs inspecting, re-run and add it temporarily on a
-      # branch, or make the repo private for that run.
-
-      - name: Cleanup
-        if: always()
-        run: security delete-keychain build.keychain || true
-
-      # PBI 612 — this is what turns the waiting Azure job green or red. `always()` is load-bearing:
-      # without it a failed build never calls back and the Azure job hangs until its 120-minute
-      # timeout instead of reporting the failure. Skipped entirely for manual GitHub-UI runs.
-      - name: Report result back to Azure DevOps
-        if: always() && inputs.planUrl != ''
-        env:
-          AZDO_CALLBACK_PAT: ${{ secrets.AZDO_CALLBACK_PAT }}
-        run: |
-          set -e
-          if [ "${{ job.status }}" = "success" ]; then RESULT=succeeded; else RESULT=failed; fi
-          echo "Reporting '$RESULT' to Azure DevOps plan ${{ inputs.planId }}"
-          AUTH=$(printf ":%s" "$AZDO_CALLBACK_PAT" | base64)
-          curl -sS --fail-with-body -X POST \
-            "${{ inputs.planUrl }}${{ inputs.projectId }}/_apis/distributedtask/hubs/${{ inputs.hubName }}/plans/${{ inputs.planId }}/events?api-version=2.0-preview.1" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Basic $AUTH" \
-            -d "{\"name\":\"TaskCompleted\",\"taskId\":\"${{ inputs.taskInstanceId }}\",\"jobId\":\"${{ inputs.jobId }}\",\"result\":\"$RESULT\"}"
