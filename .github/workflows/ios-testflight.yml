@@ -164,7 +164,27 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $EXISTING
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
           rm -f cert.p12
+
+          # Apple's WWDR intermediate. An OpenSSL-exported p12 carries only the LEAF certificate, so
+          # without this the identity cannot chain to Apple's root and `find-identity -v` omits it as
+          # not-valid-for-codesigning -- leaving IDENTITY empty, this step GREEN, and the real failure
+          # surfacing 1000 lines later as "No valid iOS code signing keys found in keychain".
+          curl -fsSL -o AppleWWDRCAG3.cer https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer
+          security import AppleWWDRCAG3.cer -k "$KEYCHAIN" -T /usr/bin/codesign
+
           IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" | grep -E 'Apple Distribution|iPhone Distribution' | head -n1 | sed -E 's/.*"(.*)"/\1/')
+          # The lookup above ends in `sed`, which exits 0 on empty input, so `set -e` never fires and an
+          # empty IDENTITY used to sail through as -p:CodesignKey="". Fail here instead, and print both
+          # listings: expired certs show as CSSMERR_TP_CERT_EXPIRED in the second one, an untrusted
+          # chain appears there but not in the first.
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No valid distribution identity after import. Valid identities:"
+            security find-identity -v -p codesigning "$KEYCHAIN" || true
+            echo "All identities (includes expired/untrusted):"
+            security find-identity -p codesigning "$KEYCHAIN" || true
+            exit 1
+          fi
+          echo "Using signing identity: $IDENTITY"
           echo "CODESIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Install provisioning profile
