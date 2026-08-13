@@ -200,17 +200,6 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/"Provisioning Profiles"/"$UUID".mobileprovision
           echo "PROVISION_UUID=$UUID" >> "$GITHUB_ENV"
 
-      - name: Diag - what does the keychain look like to MSBuild
-        run: |
-          echo "--- default keychain ---";      security default-keychain || true
-          echo "--- search list ---";           security list-keychains -d user || true
-          echo "--- identities, NO keychain arg (this is what MSBuild enumerates) ---"
-          security find-identity -v -p codesigning || true
-          echo "--- identities in build.keychain explicitly ---"
-          security find-identity -v -p codesigning build.keychain || true
-          echo "--- CODESIGN_IDENTITY carried over: [$CODESIGN_IDENTITY]"
-
-
       # The Xcode path is the CANONICAL Xcode_26.6.app, never the Xcode_26.6.0.app symlink alias:
       # xcodebuild's SDK resolution keys off the real path and fails intermittently through the
       # alias. The actool check is deliberately in the SAME step as the publish, with no gap — an
