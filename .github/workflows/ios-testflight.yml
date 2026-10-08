@@ -133,9 +133,27 @@ jobs:
             --store-password-in-clear-text \
             --configfile NuGet.Config
 
+      # Bug 1069 — PINNED. Never a bare `dotnet workload install ios`: that takes the newest iOS
+      # workload manifest on NuGet, and on 2026-09-28 that became 27.0.10722, which requires
+      # Xcode 27 — not on the macos-26 image (it carries Xcode 26.0.1–26.6; Xcode 27 is a separate
+      # preview runner label). This very file built and uploaded on 2026-09-05 and failed on
+      # 2026-09-30 with nothing changed here. Microsoft's newest workload sets (10.401.1, 10.112.1)
+      # pin the 27.0 manifest too, so "latest workload set" breaks the same way. The pin lives in
+      # the SOURCE repo (deploy/ios/workload-rollback.json) so it is reviewed with the code it
+      # builds and travels with the branch; it MUST agree with the Xcode path in the Publish step.
+      # `--from-rollback-file` still parses on the .NET 10 SDK although `--help` no longer lists
+      # it; the "will now use loose manifests" notice it prints is expected, not an error.
       - name: Install workload
         working-directory: src
-        run: dotnet workload install ios
+        run: |
+          set -e
+          PIN=deploy/ios/workload-rollback.json
+          if [ ! -f "$PIN" ]; then
+            echo "::error::$PIN is missing from this branch - the iOS workload must be pinned (Bug 1069)."
+            exit 1
+          fi
+          echo "Pinning iOS workload to: $(cat "$PIN")"
+          dotnet workload install ios --from-rollback-file "$PIN"
 
       # GITHUB_RUN_ID, not the Azure build id. App Store Connect rejects a build number lower than
       # one it has already accepted for this version, and run ids are large and always increasing,
@@ -200,7 +218,9 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/"Provisioning Profiles"/"$UUID".mobileprovision
           echo "PROVISION_UUID=$UUID" >> "$GITHUB_ENV"
 
-      # The Xcode path is the CANONICAL Xcode_26.0.app, never the Xcode_26.6.0.app symlink alias:
+      # Xcode 26.6 is what deploy/ios/workload-rollback.json (iOS manifest 26.5.x) requires; move the
+      # two together (Bug 1069). App Store Connect rejected an upload built against the 26.5 SDK.
+      # The Xcode path is the CANONICAL Xcode_26.6.app, never the Xcode_26.6.0.app symlink alias:
       # xcodebuild's SDK resolution keys off the real path and fails intermittently through the
       # alias. The actool check is deliberately in the SAME step as the publish, with no gap — an
       # earlier standalone check was observed to pass and then fail minutes later at publish time.
@@ -208,12 +228,12 @@ jobs:
         working-directory: src
         run: |
           set -e
-          TARGET="/Applications/Xcode_26.0.app"
+          TARGET="/Applications/Xcode_26.6.app"
           DEV="$TARGET/Contents/Developer"
           SDK="$DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
           sudo xcode-select -s "$DEV"
           if ! xcodebuild -sdk "$SDK" -find actool >/dev/null 2>&1; then
-            echo "::error::actool still unresolvable for Xcode 26.0 right before publish."
+            echo "::error::actool still unresolvable for Xcode 26.6 right before publish."
             xcodebuild -sdk "$SDK" -find actool
             exit 1
           fi
