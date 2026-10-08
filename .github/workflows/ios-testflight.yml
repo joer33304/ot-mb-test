@@ -200,7 +200,7 @@ jobs:
           cp profile.mobileprovision ~/Library/MobileDevice/"Provisioning Profiles"/"$UUID".mobileprovision
           echo "PROVISION_UUID=$UUID" >> "$GITHUB_ENV"
 
-      # The Xcode path is the CANONICAL Xcode_26.6.app, never the Xcode_26.6.0.app symlink alias:
+      # The Xcode path is the CANONICAL Xcode_27.0.app, never the Xcode_26.6.0.app symlink alias:
       # xcodebuild's SDK resolution keys off the real path and fails intermittently through the
       # alias. The actool check is deliberately in the SAME step as the publish, with no gap — an
       # earlier standalone check was observed to pass and then fail minutes later at publish time.
@@ -208,12 +208,12 @@ jobs:
         working-directory: src
         run: |
           set -e
-          TARGET="/Applications/Xcode_26.6.app"
+          TARGET="/Applications/Xcode_27.0.app"
           DEV="$TARGET/Contents/Developer"
           SDK="$DEV/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
           sudo xcode-select -s "$DEV"
           if ! xcodebuild -sdk "$SDK" -find actool >/dev/null 2>&1; then
-            echo "::error::actool still unresolvable for Xcode 26.6 right before publish."
+            echo "::error::actool still unresolvable for Xcode 27.0 right before publish."
             xcodebuild -sdk "$SDK" -find actool
             exit 1
           fi
