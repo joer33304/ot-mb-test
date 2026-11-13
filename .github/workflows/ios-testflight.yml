@@ -320,6 +320,19 @@ jobs:
           if ! ls "$STAGE" | grep -q '\.app\.dSYM$'; then
             echo "::warning::No dSYM for the app itself, only for frameworks - app frames will not symbolicate"
           fi
+          # The app's own executable too: a dSYM carries no machine code, so without it a crash site
+          # cannot be disassembled (Bug 1484). Only the Mach-O, encrypted with the symbols - never
+          # the .app or .ipa.
+          APP=$( { find ~/Library/Developer/Xcode/Archives -path '*/Products/Applications/*.app' -type d -prune 2>/dev/null
+                   find "$GITHUB_WORKSPACE/src/$IOS_DIR/bin" -path '*ios-arm64*' -name '*.app' -type d -prune 2>/dev/null; } | head -n1)
+          if [ -n "$APP" ]; then
+            EXE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP/Info.plist")
+            mkdir -p "$STAGE/app-binary"
+            cp "$APP/$EXE" "$STAGE/app-binary/"
+            echo "App executable kept: $EXE ($(dwarfdump --uuid "$APP/$EXE" | awk '{print $2}'))"
+          else
+            echo "::warning::No .app found - app executable not kept"
+          fi
           echo "Crash symbol UUIDs (match against the Binary Images of a crash report):"
           for d in "$STAGE"/*.dSYM; do
             echo "  $(basename "$d")"
