@@ -1,7 +1,7 @@
 # iOS TestFlight build.
 #
 # Started by an upstream Azure DevOps pipeline, which passes the branch to build and its own build
-# id for correlation. That pipeline does NOT wait for this run — it goes green the moment the
+# id for correlation. That pipeline does NOT wait for this run â€” it goes green the moment the
 # dispatch is accepted, so THIS run is the authority on whether the build actually worked.
 # Can also be run by hand from the Actions tab.
 #
@@ -11,9 +11,9 @@
 # This repo is public so the macOS runners are free and unmetered. It therefore holds only this
 # workflow and never any application source: the build clones the real source at run time via
 # secrets.AZDO_PAT / secrets.AZDO_REPO_URL. Keep every project path, feed URL and endpoint
-# RESOLVED AT RUN TIME or held in a secret — never a literal in this file. Run logs are
+# RESOLVED AT RUN TIME or held in a secret â€” never a literal in this file. Run logs are
 # world-readable too (secret VALUES are masked, echoed paths are not), and so are
-# workflow_dispatch inputs — never accept a credential as an input here.
+# workflow_dispatch inputs â€” never accept a credential as an input here.
 #
 # REQUIRED GITHUB SECRETS
 #   AZDO_PAT, AZDO_REPO_URL            clone the source out of Azure DevOps
@@ -21,8 +21,10 @@
 #   PROVISION_PROFILE_BASE64           App Store provisioning profile
 #   ASC_AUTH_KEY_BASE64, ASC_KEY_ID, ASC_ISSUER_ID   App Store Connect API key for altool
 #   FEED_USER, FEED_PASS               internal NuGet feed
-#   API_URL                            PBI 612 — OPTIONAL. Overrides the API endpoint the built app
-#                                      talks to. Unset ⇒ ship appsettings.release.json as committed.
+#   DSYM_PASSWORD                      Bug 1484 â€” OPTIONAL. Encrypts the crash symbols kept as an
+#                                      artifact. Unset â‡’ none are kept.
+#   API_URL                            PBI 612 â€” OPTIONAL. Overrides the API endpoint the built app
+#                                      talks to. Unset â‡’ ship appsettings.release.json as committed.
 
 name: iOS Build
 
@@ -34,7 +36,7 @@ on:
         required: true
         default: 'master'
 
-      # PBI 612 — supplied by the Azure pipeline that dispatches this run, purely so the two runs can
+      # PBI 612 â€” supplied by the Azure pipeline that dispatches this run, purely so the two runs can
       # be correlated. Optional, so a manual run from the Actions tab still works.
       #
       # This is the ONLY thing Azure passes besides the branch. Azure does NOT wait for this build:
@@ -52,7 +54,7 @@ jobs:
       NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
     steps:
       # Echoed so an Azure run and a GitHub run can be matched up from either side. Azure cannot
-      # link here directly — workflow_dispatch returns 204 with no run id — so this is the join key.
+      # link here directly â€” workflow_dispatch returns 204 with no run id â€” so this is the join key.
       - name: Azure correlation
         if: inputs.azureBuildId != ''
         run: echo "Dispatched by Azure DevOps build ${{ inputs.azureBuildId }}"
@@ -66,14 +68,14 @@ jobs:
           git clone --branch "${{ github.event.inputs.branch }}" --depth 1 \
             "https://x-access-token:${SRC_PAT}@${SRC_URL}" src
 
-      # PBI 612, ported from the Azure pipeline this replaced. Ephemeral working-copy edit only —
+      # PBI 612, ported from the Azure pipeline this replaced. Ephemeral working-copy edit only â€”
       # the clone is thrown away with the runner. The same appsettings file is shared with the
       # Desktop and Web builds, so this must never become a committed change.
       #
-      # ServerURL in appsettings.release.json IS the API base the app talks to — it becomes
+      # ServerURL in appsettings.release.json IS the API base the app talks to â€” it becomes
       # StaticShared.ApiUrl at startup. Normal case: leave the API_URL secret UNSET and the build
       # ships whatever is committed. Set it only to aim a build at a different API, and remember it
-      # then applies to EVERY build until cleared — same bundle id for all of them, so the next
+      # then applies to EVERY build until cleared â€” same bundle id for all of them, so the next
       # TestFlight update REPLACES whatever build a tester already had. There is no in-app picker.
       # (Per-tenant build selection is a separate PBI; it is deliberately not modelled here.)
       #
@@ -86,7 +88,7 @@ jobs:
         run: |
           set -e
           if [ -z "$API_URL" ]; then
-            echo "API_URL secret is unset — shipping the committed appsettings.release.json ServerURL as-is"
+            echo "API_URL secret is unset â€” shipping the committed appsettings.release.json ServerURL as-is"
             exit 0
           fi
           FILE=$(find . -name appsettings.release.json -not -path '*/bin/*' -not -path '*/obj/*' | head -n1)
@@ -133,9 +135,9 @@ jobs:
             --store-password-in-clear-text \
             --configfile NuGet.Config
 
-      # Bug 1069 — PINNED. Never a bare `dotnet workload install ios`: that takes the newest iOS
+      # Bug 1069 â€” PINNED. Never a bare `dotnet workload install ios`: that takes the newest iOS
       # workload manifest on NuGet, and on 2026-09-28 that became 27.0.10722, which requires
-      # Xcode 27 — not on the macos-26 image (it carries Xcode 26.0.1–26.6; Xcode 27 is a separate
+      # Xcode 27 â€” not on the macos-26 image (it carries Xcode 26.0.1â€“26.6; Xcode 27 is a separate
       # preview runner label). This very file built and uploaded on 2026-09-05 and failed on
       # 2026-09-30 with nothing changed here. Microsoft's newest workload sets (10.401.1, 10.112.1)
       # pin the 27.0 manifest too, so "latest workload set" breaks the same way. The pin lives in
@@ -159,11 +161,25 @@ jobs:
       # one it has already accepted for this version, and run ids are large and always increasing,
       # whereas Azure's Build.BuildId (~2300) is far BELOW the run ids already uploaded. Do not
       # "unify" this with the Azure build number.
+      #
+      # The VERSION (CFBundleShortVersionString) is major.minor from the source repo's Info.plist â€”
+      # bumped there by hand to start a release line â€” plus GITHUB_RUN_NUMBER as the patch, so every
+      # build reads e.g. 1.0.214 in TestFlight instead of an unchanging 1.0. The run number only ever
+      # increases, so the version never goes backwards when major.minor stays put. Only the first two
+      # components of the committed value are used, so a stray patch committed there is ignored.
       - name: Stamp build number
         working-directory: src
         run: |
           set -e
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_ID" "$IOS_DIR/Info.plist"
+          BASE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$IOS_DIR/Info.plist" | cut -d. -f1-2)
+          if ! echo "$BASE" | grep -Eq '^[0-9]+\.[0-9]+$'; then
+            echo "::error::CFBundleShortVersionString must start with major.minor (found '$BASE')."
+            exit 1
+          fi
+          VERSION="$BASE.$GITHUB_RUN_NUMBER"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$IOS_DIR/Info.plist"
+          echo "Version $VERSION (build $GITHUB_RUN_ID)"
 
       - name: Import certificate
         env:
@@ -222,7 +238,7 @@ jobs:
       # two together (Bug 1069). App Store Connect rejected an upload built against the 26.5 SDK.
       # The Xcode path is the CANONICAL Xcode_26.6.app, never the Xcode_26.6.0.app symlink alias:
       # xcodebuild's SDK resolution keys off the real path and fails intermittently through the
-      # alias. The actool check is deliberately in the SAME step as the publish, with no gap — an
+      # alias. The actool check is deliberately in the SAME step as the publish, with no gap â€” an
       # earlier standalone check was observed to pass and then fail minutes later at publish time.
       - name: Publish
         working-directory: src
@@ -269,6 +285,46 @@ jobs:
           IPA="$GITHUB_WORKSPACE/app.ipa"
           xcrun altool --validate-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+
+      # Bug 1484 â€” the crash symbols (.dSYM), ENCRYPTED. A device crash report (.ips) is raw addresses
+      # until it is matched against the dSYM of the exact build that crashed, and that file exists
+      # nowhere but on this runner. It cannot be published as it is (public repo, see the NOTE below),
+      # so it leaves only as AES-256 ciphertext under the DSYM_PASSWORD secret; the artifact is
+      # world-downloadable and useless without the password. Unset secret => nothing is kept, and the
+      # build is unaffected. The UUIDs printed here are what a crash report's "Binary Images" line
+      # carries, so a report can be matched to its run from the log alone. Decrypt with
+      # deploy/ios/Expand-IosSymbols.ps1 in the source repo.
+      - name: Encrypt crash symbols
+        env:
+          DSYM_PASSWORD: ${{ secrets.DSYM_PASSWORD }}
+        run: |
+          set -e
+          if [ -z "$DSYM_PASSWORD" ]; then
+            echo "::warning::DSYM_PASSWORD secret is unset - no crash symbols kept for this build"
+            exit 0
+          fi
+          DSYM=$( { find ~/Library/Developer/Xcode/Archives -name '*.dSYM' -type d -prune 2>/dev/null; \
+                    find "$GITHUB_WORKSPACE/src/$IOS_DIR/bin" -name '*.dSYM' -type d -prune 2>/dev/null; } | head -n1)
+          if [ -z "$DSYM" ]; then
+            echo "::warning::The build produced no .dSYM - no crash symbols kept for this build"
+            exit 0
+          fi
+          echo "Crash symbol UUIDs (match against the Binary Images of a crash report):"
+          dwarfdump --uuid "$DSYM" | awk '{print "  " $2 " " $3}'
+          OPENSSL="$(brew --prefix openssl@3 2>/dev/null)/bin/openssl"
+          [ -x "$OPENSSL" ] || OPENSSL=openssl
+          tar -czf - -C "$(dirname "$DSYM")" "$(basename "$DSYM")" \
+            | "$OPENSSL" enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:DSYM_PASSWORD \
+                -out "$GITHUB_WORKSPACE/symbols.bin"
+          ls -l "$GITHUB_WORKSPACE/symbols.bin"
+
+      - name: Keep encrypted crash symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbols-${{ github.run_id }}
+          path: ${{ github.workspace }}/symbols.bin
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Cleanup
         if: always()
